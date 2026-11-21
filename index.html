@@ -10,13 +10,13 @@
 <style>
   body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 12px; background: #f4f6fa; }
   h1 { font-size: 20px; margin: 4px 0 12px; }
-  .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
-  button { border: none; border-radius: 6px; padding: 8px 14px; font-size: 15px; cursor: pointer; }
+  .toolbar { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
+  button { border: none; border-radius: 6px; padding: 8px 10px; font-size: 14px; white-space: nowrap; cursor: pointer; }
   .primary { background: #5b7fb8; color: #fff; }
   .plain { background: #e3e7ef; color: #333; }
   .del { background: transparent; color: #c0392b; padding: 6px 10px; font-size: 20px; }
   table { width: 100%; border-collapse: collapse; background: #fff; }
-  th { background: #5b7fb8; color: #fff; padding: 10px 6px; font-size: 15px; }
+  th { background: #5b7fb8; color: #fff; padding: 10px 4px; font-size: 14px; white-space: nowrap; }
   td { border: 1px solid #dde2ea; padding: 0; text-align: center; }
   td.idx { width: 44px; color: #555; }
   td input { width: 100%; box-sizing: border-box; border: none; padding: 10px 6px;
@@ -26,14 +26,28 @@
   td.amount { text-align: right; padding: 10px 8px; color: #222; }
   tfoot td { white-space: nowrap; position: sticky; bottom: 0; font-weight: bold; padding: 12px 8px; background: #f0f3f8; font-size: 16px; }
   body { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  select { font-size: 16px; padding: 7px 8px; border-radius: 6px; border: 1px solid #c5ccd8;
+           background: #fff; max-width: 100%; flex: 1 1 90px; min-width: 0; }
+  .danger { color: #c0392b; }
+  #toast { position: fixed; left: 50%; top: 40%; transform: translateX(-50%); background: rgba(0,0,0,.8);
+           color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 15px; display: none; z-index: 9; }
 </style>
 </head>
 <body>
 <h1>商品金额计算表</h1>
 <div class="toolbar">
-  <button class="primary" id="addBtn">+ 添加一行</button>
-  <button class="plain" id="clearBtn">清空全部</button>
+  <select id="tableSel"></select>
+  <button class="primary" id="newBtn">+ 新建</button>
+  <button class="plain" id="renameBtn">改名</button>
+  <button class="plain danger" id="delTableBtn">删除</button>
 </div>
+<div class="toolbar">
+  <button class="primary" id="addBtn">+ 添加一行</button>
+  <button class="plain" id="exportBtn">导出 Excel</button>
+  <button class="plain" id="copyBtn">复制文字</button>
+  <button class="plain" id="clearBtn">清空本表</button>
+</div>
+<div id="toast"></div>
 <table>
   <thead>
     <tr><th>序号</th><th>名称</th><th>数量</th><th>单价(元)</th><th>金额(元)</th><th></th></tr>
@@ -51,7 +65,19 @@ const SAMPLE = [['炫赫门',2,172],['上风',2,112],['颜悦',2,175],['黄山',
   ['云龙',4,127],['玫瑰二代',2,93],['白塔',4,85],['小目标',2,122],['绿钻',2,115],['江山',2,95],
   ['黄山',2,75],['大云',2,191]].map(([name, qty, price]) => ({ name, qty: String(qty), price: String(price) }));
 
-let rows = JSON.parse(localStorage.getItem(KEY) || 'null') || SAMPLE;
+// 多个表格存在一起：{ current: id, tables: [{ id, name, rows }] }
+const STORE = 'price-table-v2';
+const blankRows = () => [{ name: '', qty: '', price: '' }];
+const today = () => { const d = new Date(); return `${d.getMonth() + 1}月${d.getDate()}日`; };
+let db = JSON.parse(localStorage.getItem(STORE) || 'null');
+if (!db) {
+  // 第一次用新版：把旧版里已经填的数据搬成"表格1"，不会丢
+  const old = JSON.parse(localStorage.getItem(KEY) || 'null');
+  db = { current: 't1', tables: [{ id: 't1', name: '表格1', rows: old || SAMPLE }] };
+  localStorage.setItem(STORE, JSON.stringify(db));
+}
+const cur = () => db.tables.find(t => t.id === db.current) || db.tables[0];
+let rows = cur().rows;
 const body = document.getElementById('body');
 
 // 按“分”计算，避免 0.1+0.2 这类小数误差
@@ -59,7 +85,7 @@ const toNum = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
 const amountCents = r => Math.round(toNum(r.qty) * toNum(r.price) * 100);
 const fmt = cents => (cents / 100).toFixed(2);
 
-function save() { localStorage.setItem(KEY, JSON.stringify(rows)); }
+function save() { cur().rows = rows; localStorage.setItem(STORE, JSON.stringify(db)); }
 
 function updateTotals() {
   let qty = 0, cents = 0;
@@ -92,14 +118,77 @@ function render() {
   updateTotals();
 }
 
-document.getElementById('addBtn').addEventListener('click', () => {
+const $ = id => document.getElementById(id);
+function toast(msg) { const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 1800); }
+
+function renderTables() {
+  const sel = $('tableSel'); sel.innerHTML = '';
+  db.tables.forEach(t => { const o = document.createElement('option');
+    o.value = t.id; o.textContent = t.name; sel.appendChild(o); });
+  sel.value = cur().id;
+}
+function switchTo(id) { db.current = id; rows = cur().rows; save(); renderTables(); render(); }
+
+$('tableSel').addEventListener('change', e => switchTo(e.target.value));
+$('newBtn').addEventListener('click', () => {
+  const name = prompt('新表格的名字：', today());
+  if (name === null) return;
+  const id = 't' + Date.now();
+  db.tables.push({ id, name: name.trim() || today(), rows: blankRows() });
+  switchTo(id); toast('已新建，原来的表格还在上面的下拉框里');
+});
+$('renameBtn').addEventListener('click', () => {
+  const name = prompt('改成什么名字：', cur().name);
+  if (name && name.trim()) { cur().name = name.trim(); save(); renderTables(); }
+});
+$('delTableBtn').addEventListener('click', () => {
+  if (db.tables.length === 1) { toast('至少要留一个表格'); return; }
+  if (!confirm(`确定删除"${cur().name}"整张表吗？删了找不回来。`)) return;
+  db.tables = db.tables.filter(t => t.id !== db.current);
+  switchTo(db.tables[0].id);
+});
+$('addBtn').addEventListener('click', () => {
   rows.push({ name: '', qty: '', price: '' });
   render(); save();
   body.lastElementChild.querySelector('input').focus();
 });
-document.getElementById('clearBtn').addEventListener('click', () => {
-  if (confirm('确定清空所有数据吗？')) { rows = [{ name: '', qty: '', price: '' }]; render(); save(); }
+$('clearBtn').addEventListener('click', () => {
+  if (confirm(`确定清空"${cur().name}"里的所有数据吗？`)) { rows = blankRows(); save(); render(); }
 });
+// ---------- 导出 ----------
+const filled = () => rows.filter(r => r.name || r.qty || r.price);
+function totals() { let q = 0, c = 0; filled().forEach(r => { q += toNum(r.qty); c += amountCents(r); });
+  return { qty: Math.round(q * 100) / 100, amt: fmt(c) }; }
+
+$('exportBtn').addEventListener('click', async () => {
+  const cell = v => '"' + String(v).replace(/"/g, '""') + '"';
+  const lines = [['序号', '名称', '数量', '单价(元)', '金额(元)']];
+  filled().forEach((r, i) => lines.push([i + 1, r.name, r.qty, fmt(Math.round(toNum(r.price) * 100)), fmt(amountCents(r))]));
+  const t = totals(); lines.push(['合计', '', t.qty, '', t.amt]);
+  const csv = '\uFEFF' + lines.map(l => l.map(cell).join(',')).join('\r\n');  // BOM 让 Excel 认出中文
+  const fname = (cur().name.replace(/[\\/:*?"<>|]/g, '_') || '表格') + '.csv';
+  const file = new File([csv], fname, { type: 'text/csv' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: cur().name }); } catch (e) { /* 用户取消 */ }
+    return;
+  }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = fname;
+  document.body.appendChild(a); a.click(); a.remove();
+});
+
+$('copyBtn').addEventListener('click', async () => {
+  const t = totals();
+  const text = [cur().name, ...filled().map((r, i) =>
+      `${i + 1}. ${r.name}  ${r.qty} × ${r.price} = ${fmt(amountCents(r))}`),
+    `合计：数量 ${t.qty}，金额 ${t.amt} 元`].join('\n');
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove(); }
+  toast('已复制，可以去微信粘贴');
+});
+
+renderTables();
 render();
 </script>
 </body>
