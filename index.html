@@ -29,6 +29,14 @@
   select { font-size: 16px; padding: 7px 8px; border-radius: 6px; border: 1px solid #c5ccd8;
            background: #fff; max-width: 100%; flex: 1 1 90px; min-width: 0; }
   .danger { color: #c0392b; }
+  #modal { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; z-index: 8;
+           align-items: flex-start; justify-content: center; padding: 20px 10px; }
+  #modal .box { background: #fff; border-radius: 10px; padding: 14px; width: 100%; max-width: 520px; }
+  #modal h2 { font-size: 17px; margin: 0 0 8px; }
+  #modal ol { margin: 0 0 10px; padding-left: 20px; font-size: 14px; line-height: 1.7; color: #444; }
+  #modal textarea { width: 100%; box-sizing: border-box; height: 200px; font-size: 16px;
+           border: 1px solid #c5ccd8; border-radius: 6px; padding: 8px; }
+  #parseInfo { font-size: 14px; color: #5b7fb8; margin: 6px 0; min-height: 20px; }
   #toast { position: fixed; left: 50%; top: 40%; transform: translateX(-50%); background: rgba(0,0,0,.8);
            color: #fff; padding: 10px 18px; border-radius: 8px; font-size: 15px; display: none; z-index: 9; }
 </style>
@@ -45,9 +53,27 @@
   <button class="primary" id="addBtn">+ 添加一行</button>
   <button class="plain" id="exportBtn">导出 Excel</button>
   <button class="plain" id="copyBtn">复制文字</button>
+  <button class="primary" id="importBtn">豆包导入</button>
   <button class="plain" id="clearBtn">清空本表</button>
 </div>
 <div id="toast"></div>
+<div id="modal"><div class="box">
+  <h2>豆包识别导入</h2>
+  <ol>
+    <li>点下面"复制提示语"，打开豆包，发照片，再粘贴这句话发送。</li>
+    <li>豆包回复后，长按复制它列出的内容。</li>
+    <li>回到这里，粘贴到下面的框里，点导入。</li>
+  </ol>
+  <button class="plain" id="copyPromptBtn">复制提示语</button>
+  <textarea id="importText" placeholder="粘贴到这里，例如：&#10;炫赫门 2 172&#10;上风 2 112"></textarea>
+  <div id="parseInfo"></div>
+  <div class="toolbar">
+    <button class="primary" id="importNewBtn">导入为新表格</button>
+    <button class="plain" id="importAppendBtn">加到本表后面</button>
+    <button class="plain" id="importCancelBtn">取消</button>
+  </div>
+</div></div>
+
 <table>
   <thead>
     <tr><th>序号</th><th>名称</th><th>数量</th><th>单价(元)</th><th>金额(元)</th><th></th></tr>
@@ -187,6 +213,58 @@ $('copyBtn').addEventListener('click', async () => {
     ta.select(); document.execCommand('copy'); ta.remove(); }
   toast('已复制，可以去微信粘贴');
 });
+
+// ---------- 拍照识别导入（豆包识别 → 粘贴） ----------
+const AI_PROMPT = '请识别这张照片里的手写清单。每一条输出一行，格式是：名称 数量 单价，中间用空格隔开。' +
+  '不要表头、不要序号、不要合计、不要其他说明文字。看不清的字后面加一个问号。';
+
+// 每行找出：名称（带汉字/字母的部分）+ 后面的前两个数字（数量、单价）
+function parseLines(text) {
+  const out = [];
+  text.split(/\r?\n/).forEach(line => {
+    line = line.replace(/[|｜\t,，、：:×xX*＊=]/g, ' ').replace(/[元块¥￥]/g, ' ')
+               .replace(/(\d)\s*(条|包|盒|个|件|瓶|箱|支|袋)/g, '$1 ')
+               .replace(/[０-９．]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).trim();
+    if (!line || /名称|数量|单价|合计|总计|^-+$/.test(line.replace(/\s|-/g, '') || '-')) return;
+    const tokens = line.split(/\s+/).filter(t => t && !/^-+$/.test(t));
+    const isNum = t => /^\d+(\.\d+)?$/.test(t);
+    let i = 0;
+    while (i < tokens.length && isNum(tokens[i])) i++;          // 跳过行首序号
+    const nameParts = [];
+    while (i < tokens.length && !isNum(tokens[i])) nameParts.push(tokens[i++]);
+    const nums = tokens.slice(i).filter(isNum);
+    const name = nameParts.join('').replace(/^\d+[.、)）]/, '');
+    if (name && nums.length >= 1) out.push({ name, qty: nums[0], price: nums[1] || '' });
+  });
+  return out;
+}
+
+const modal = $('modal');
+$('importBtn').addEventListener('click', () => { modal.style.display = 'flex'; $('importText').focus(); });
+$('importCancelBtn').addEventListener('click', () => { modal.style.display = 'none'; });
+$('copyPromptBtn').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(AI_PROMPT); toast('已复制，去豆包粘贴'); }
+  catch (e) { prompt('长按复制这段话：', AI_PROMPT); }
+});
+$('importText').addEventListener('input', () => {
+  const n = parseLines($('importText').value).length;
+  $('parseInfo').textContent = n ? `识别到 ${n} 条，导入后可以逐格检查修改` : '';
+});
+function doImport(asNew) {
+  const items = parseLines($('importText').value);
+  if (!items.length) { toast('没认出内容，格式应为：名称 数量 单价'); return; }
+  if (asNew) {
+    const id = 't' + Date.now();
+    db.tables.push({ id, name: today() + '（导入）', rows: items });
+    switchTo(id);
+  } else {
+    rows = rows.filter(r => r.name || r.qty || r.price).concat(items); save(); render();
+  }
+  $('importText').value = ''; $('parseInfo').textContent = ''; modal.style.display = 'none';
+  toast(`已导入 ${items.length} 条，带"？"的请核对`);
+}
+$('importNewBtn').addEventListener('click', () => doImport(true));
+$('importAppendBtn').addEventListener('click', () => doImport(false));
 
 renderTables();
 render();
