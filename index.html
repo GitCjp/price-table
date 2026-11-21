@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="算账表">
+<meta name="theme-color" content="#5b7fb8">
+<title>商品金额计算表</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 0; padding: 12px; background: #f4f6fa; }
+  h1 { font-size: 20px; margin: 4px 0 12px; }
+  .toolbar { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  button { border: none; border-radius: 6px; padding: 8px 14px; font-size: 15px; cursor: pointer; }
+  .primary { background: #5b7fb8; color: #fff; }
+  .plain { background: #e3e7ef; color: #333; }
+  .del { background: transparent; color: #c0392b; padding: 6px 10px; font-size: 20px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; }
+  th { background: #5b7fb8; color: #fff; padding: 10px 6px; font-size: 15px; }
+  td { border: 1px solid #dde2ea; padding: 0; text-align: center; }
+  td.idx { width: 44px; color: #555; }
+  td input { width: 100%; box-sizing: border-box; border: none; padding: 10px 6px;
+             font-size: 16px; text-align: center; background: transparent; }
+  td input:focus { outline: 2px solid #5b7fb8; background: #eef3fb; }
+  td input.num { text-align: right; }
+  td.amount { text-align: right; padding: 10px 8px; color: #222; }
+  tfoot td { white-space: nowrap; position: sticky; bottom: 0; font-weight: bold; padding: 12px 8px; background: #f0f3f8; font-size: 16px; }
+  body { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+</style>
+</head>
+<body>
+<h1>商品金额计算表</h1>
+<div class="toolbar">
+  <button class="primary" id="addBtn">+ 添加一行</button>
+  <button class="plain" id="clearBtn">清空全部</button>
+</div>
+<table>
+  <thead>
+    <tr><th>序号</th><th>名称</th><th>数量</th><th>单价(元)</th><th>金额(元)</th><th></th></tr>
+  </thead>
+  <tbody id="body"></tbody>
+  <tfoot>
+    <tr><td>合计</td><td></td><td id="totalQty">0</td><td></td><td id="totalAmt">0.00</td><td></td></tr>
+  </tfoot>
+</table>
+<script>
+const KEY = 'price-table-rows';
+const SAMPLE = [['炫赫门',2,172],['上风',2,112],['颜悦',2,175],['黄山',2,76],['利群',2,164],
+  ['荷花',1,293],['芙蓉王',2,202],['蓝楼',2,160],['硬江河',2,77],['乐途',2,122],['紫钻',2,57],
+  ['玉溪',2,185],['迎宾',4,63],['紫云',4,113],['红钻',4,58],['纯净',2,168],['白将',2,120],
+  ['云龙',4,127],['玫瑰二代',2,93],['白塔',4,85],['小目标',2,122],['绿钻',2,115],['江山',2,95],
+  ['黄山',2,75],['大云',2,191]].map(([name, qty, price]) => ({ name, qty: String(qty), price: String(price) }));
+
+let rows = JSON.parse(localStorage.getItem(KEY) || 'null') || SAMPLE;
+const body = document.getElementById('body');
+
+// 按“分”计算，避免 0.1+0.2 这类小数误差
+const toNum = v => { const n = parseFloat(v); return isNaN(n) ? 0 : n; };
+const amountCents = r => Math.round(toNum(r.qty) * toNum(r.price) * 100);
+const fmt = cents => (cents / 100).toFixed(2);
+
+function save() { localStorage.setItem(KEY, JSON.stringify(rows)); }
+
+function updateTotals() {
+  let qty = 0, cents = 0;
+  rows.forEach((r, i) => {
+    qty += toNum(r.qty);
+    cents += amountCents(r);
+    body.children[i].querySelector('.amount').textContent = fmt(amountCents(r));
+  });
+  document.getElementById('totalQty').textContent = Math.round(qty * 100) / 100;
+  document.getElementById('totalAmt').textContent = fmt(cents);
+}
+
+function render() {
+  body.innerHTML = '';
+  rows.forEach((r, i) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td class="idx">${i + 1}</td>
+      <td><input data-k="name" placeholder="名称"></td>
+      <td><input data-k="qty" class="num" inputmode="decimal" placeholder="0"></td>
+      <td><input data-k="price" class="num" inputmode="decimal" placeholder="0.00"></td>
+      <td class="amount"></td>
+      <td><button class="del" title="删除这一行">×</button></td>`;
+    tr.querySelectorAll('input').forEach(inp => {
+      inp.value = r[inp.dataset.k];
+      inp.addEventListener('input', () => { r[inp.dataset.k] = inp.value; updateTotals(); save(); });
+    });
+    tr.querySelector('.del').addEventListener('click', () => { rows.splice(i, 1); render(); save(); });
+    body.appendChild(tr);
+  });
+  updateTotals();
+}
+
+document.getElementById('addBtn').addEventListener('click', () => {
+  rows.push({ name: '', qty: '', price: '' });
+  render(); save();
+  body.lastElementChild.querySelector('input').focus();
+});
+document.getElementById('clearBtn').addEventListener('click', () => {
+  if (confirm('确定清空所有数据吗？')) { rows = [{ name: '', qty: '', price: '' }]; render(); save(); }
+});
+render();
+</script>
+</body>
+</html>
